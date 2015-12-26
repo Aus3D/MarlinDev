@@ -7228,3 +7228,81 @@ void calculate_volumetric_multipliers() {
   for (int i = 0; i < EXTRUDERS; i++)
     volumetric_multiplier[i] = calculate_volumetric_multiplier(filament_size[i]);
 }
+
+#define AXIS_ERROR_THRESHOLD_ABORT 80	//number of steps error in any given axis after which the printer will abort
+#define AXIS_ERROR_THRESHOLD_CORRECT 5	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
+#define ERROR_CORRECT_X_AXIS
+#define ERROR_CORRECT_Y_AXIS
+//#define ERROR_CORRECT_Z_AXIS
+
+long adc_min[3] = {0};
+long adc_max[3] = {0};
+long axisError[3] = {0};
+
+
+
+void check_axis_errors() {
+
+	long axisError[3] = {0};
+
+	#if ENABLED(ERROR_CORRECT_X_AXIS)
+		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+	#endif
+
+	#if ENABLED(ERROR_CORRECT_Y_AXIS)
+		axisError[Y_AXIS] = calculate_axis_error(Y_AXIS);
+	#endif
+
+	#if ENABLED(ERROR_CORRECT_Z_AXIS)
+		axisError[Z_AXIS] = calculate_axis_error(Z_AXIS);
+	#endif
+
+	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT || abs(axisError[Y_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT || abs(axisError[Z_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
+		//pause and wait for operator or abort print based on preference
+	}
+	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT || abs(axisError[Y_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT || abs(axisError[Z_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+	{
+    	double X_current = st_get_position_mm(X_AXIS),
+	       	Y_current = st_get_position_mm(Y_AXIS),
+	       	Z_current = st_get_position_mm(Z_AXIS),
+	       	E_current = st_get_position_mm(E_AXIS);
+
+	    double axis_moveto[3]  = {X_current, Y_current, Z_current};
+
+       	st_synchronize();
+
+       	plan_buffer_line(X_current, Y_current, Z_start_location, E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
+       	st_synchronize();
+
+		for(int i = 0; i < 3; i++) {
+			if(abs(axisError[i]) >= AXIS_ERROR_THRESHOLD_CORRECT) {
+				axis_moveto[i] += axisError[i];
+			}
+		}
+
+		plan_buffer_line(axis_moveto[X_AXIS], axis_moveto[Y_AXIS], axis_moveto[Z_AXIS], E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
+       	st_synchronize();
+
+	}
+
+}
+
+//returns error in terms of microsteps
+long calculate_axis_error(int axis) {
+	return calculate_axis_position_microsteps(axis) - st_get_position(axis);
+}
+
+long calculate_axis_position_microsteps(int axis) {
+	long adc_min[axis] = 1400;
+	long adc_max[axis] = 34000;
+
+	long axis_adc_current = map((long) get_adc_reading(axis), adc_min[axis], adc_max[axis], min_pos[axis], max_pos[axis]);
+
+	return axis_adc_current * axis_steps_per_unit[axis];
+}
+
+//reads and returns raw ADC value for a given axis
+uint16_t get_adc_reading(int axis) {
+	return analogRead(axisAnalogSensorPin[axis]);
+}
+
