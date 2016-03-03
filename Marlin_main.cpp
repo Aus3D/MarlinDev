@@ -2354,7 +2354,14 @@ inline void gcode_G28() {
 
         set_axis_is_at_home(X_AXIS);
         set_axis_is_at_home(Y_AXIS);
+
+        #if ENABLED(I2C_AXIS_ENCODERS)
+        	initialise_encoders();
+        #endif
+
         sync_plan_position();
+
+
 
         #if ENABLED(DEBUG_LEVELING_FEATURE)
           if (marlin_debug_flags & DEBUG_LEVELING) {
@@ -7229,39 +7236,58 @@ void calculate_volumetric_multipliers() {
     volumetric_multiplier[i] = calculate_volumetric_multiplier(filament_size[i]);
 }
 
-#define AXIS_ERROR_THRESHOLD_ABORT 80	//number of steps error in any given axis after which the printer will abort
-#define AXIS_ERROR_THRESHOLD_CORRECT 5	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
-#define ERROR_CORRECT_X_AXIS
-#define ERROR_CORRECT_Y_AXIS
-//#define ERROR_CORRECT_Z_AXIS
 
-long adc_min[3] = {0};
-long adc_max[3] = {0};
-long axisError[3] = {0};
+/////////////////////////////////////////////////////////////
 
+#define I2C_AXIS_ENCODERS
 
+#define I2C_ENCODER_ADDR_X 30
+//#define I2C_ENCODER_ADDR_Y 31
+//#define I2C_ENCODER_ADDR_Z 32  
+
+#define ENCODER_TICKS_PER_MM 2048
+
+#define AXIS_ERROR_THRESHOLD_ABORT 200	//number of steps error in any given axis after which the printer will abort
+#define AXIS_ERROR_THRESHOLD_CORRECT 1	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
+
+#define ERROR_CORRECT_X
+//#define ERROR_CORRECT_Y
+//#define ERROR_CORRECT_Z
+
+typedef union{
+    volatile long val = 0;
+    byte bval[4];
+}i2cLong;
+
+i2cLong encoderCount;
+
+double axisError[3] = {0};
+
+long encoder_offset[4] = {0};
+
+//call when printer is homed to 0,0,0 etc to initialise starting points
+void initialise_encoders() {
+	#if ENABLED(I2C_ENCODER_ADDR_X)
+		encoder_offset[X_AXIS] = get_axis_encoder_count(X_AXIS);
+	#endif
+}
 
 void check_axis_errors() {
 
-	long axisError[3] = {0};
-
-	#if ENABLED(ERROR_CORRECT_X_AXIS)
+	#if ENABLED(ERROR_CORRECT)
 		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+		SERIAL_ECHO("X axis error of ");
+		SERIAL_ECHO(axisError[X_AXIS]);
+		SERIAL_ECHOLN("mm.");
 	#endif
 
-	#if ENABLED(ERROR_CORRECT_Y_AXIS)
-		axisError[Y_AXIS] = calculate_axis_error(Y_AXIS);
-	#endif
 
-	#if ENABLED(ERROR_CORRECT_Z_AXIS)
-		axisError[Z_AXIS] = calculate_axis_error(Z_AXIS);
-	#endif
-
-	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT || abs(axisError[Y_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT || abs(axisError[Z_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
-		//pause and wait for operator or abort print based on preference
+	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
+		SERIAL_ECHOLN("Error severe, abort!");
 	}
-	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT || abs(axisError[Y_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT || abs(axisError[Z_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT))
 	{
+		SERIAL_ECHOLN("Correcting error.");
     	double X_current = st_get_position_mm(X_AXIS),
 	       	Y_current = st_get_position_mm(Y_AXIS),
 	       	Z_current = st_get_position_mm(Z_AXIS),
@@ -7274,11 +7300,13 @@ void check_axis_errors() {
        	plan_buffer_line(X_current, Y_current, Z_start_location, E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
        	st_synchronize();
 
-		for(int i = 0; i < 3; i++) {
-			if(abs(axisError[i]) >= AXIS_ERROR_THRESHOLD_CORRECT) {
-				axis_moveto[i] += axisError[i];
-			}
-		}
+		//for(int i = 0; i < 3; i++) {
+		//	if(abs(axisError[i]) >= AXIS_ERROR_THRESHOLD_CORRECT) {
+		//		axis_moveto[i] += axisError[i];
+		//	}
+		//}
+
+       	axis_moveto[X_AXIS] += axisError[X_AXIS];
 
 		plan_buffer_line(axis_moveto[X_AXIS], axis_moveto[Y_AXIS], axis_moveto[Z_AXIS], E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
        	st_synchronize();
@@ -7287,22 +7315,41 @@ void check_axis_errors() {
 
 }
 
-//returns error in terms of microsteps
-long calculate_axis_error(int axis) {
-	return calculate_axis_position_microsteps(axis) - st_get_position(axis);
+//returns error in terms of mm
+double calculate_axis_error(int axis) {
+	return calculate_encoder_position_mm(axis) - st_get_position_mm(axis);
 }
 
-long calculate_axis_position_microsteps(int axis) {
-	long adc_min[axis] = 1400;
-	long adc_max[axis] = 34000;
-
-	long axis_adc_current = map((long) get_adc_reading(axis), adc_min[axis], adc_max[axis], min_pos[axis], max_pos[axis]);
-
-	return axis_adc_current * axis_steps_per_unit[axis];
+double calculate_encoder_position_mm(int axis) {
+	return (float) (get_axis_encoder_count(axis) - encoder_offset[axis]) / ENCODER_TICKS_PER_MM;
 }
 
-//reads and returns raw ADC value for a given axis
-uint16_t get_adc_reading(int axis) {
-	return analogRead(axisAnalogSensorPin[axis]);
+long get_axis_encoder_count(int axis) {
+	byte addr = 0;
+
+	switch(axis) {
+		case X_AXIS:
+			addr = I2C_ENCODER_ADDR_X;
+			break;
+		case Y_AXIS:
+			addr = I2C_ENCODER_ADDR_Y;
+			break;
+		case Z_AXIS:
+			addr = I2C_ENCODER_ADDR_Z;
+			break;
+		case E_AXIS:
+			addr = I2C_ENCODER_ADDR_E;
+			break;
+	}
+
+	Wire.requestFrom(addr,4);
+
+	byte index = 0;
+
+	while (Wire.available()) {
+		byte a = Wire.read();
+		encoderCount.bval[index] = a;
+		index += 1;
+	}
 }
 
