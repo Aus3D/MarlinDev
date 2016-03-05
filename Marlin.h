@@ -361,9 +361,12 @@ extern void calculate_volumetric_multipliers();
 void gcode_M860();
 void gcode_M861();
 void gcode_M862();
+void gcode_M863();
 void gcode_M865();
-void initialise_encoders();
+void i2c_encoder_init();
 void check_axis_errors();
+void correct_axis_errors();
+void set_encoder_homed(AxisEnum);
 void report_encoder_positions();
 void report_encoder_positions_mm();
 double calculate_axis_error(AxisEnum);
@@ -371,6 +374,7 @@ double calculate_encoder_position_mm(AxisEnum);
 long calculate_encoder_position(AxisEnum);
 long get_axis_encoder_count(AxisEnum);
 void set_encoder_light_mode(AxisEnum,byte,byte);
+void set_encoder_light_brightness(AxisEnum,byte,byte);
 int get_encoder_axis_address(AxisEnum);
 
 #endif //MARLIN_H

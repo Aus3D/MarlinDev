@@ -694,6 +694,8 @@ void setup() {
   st_init();    // Initialize stepper, this enables interrupts!
   setup_photpin();
   servo_init();
+  i2c_encoder_init();
+
 
   #if HAS_CONTROLLERFAN
     SET_OUTPUT(CONTROLLERFAN_PIN); //Set pin used for driver cooling fan
@@ -2386,7 +2388,7 @@ inline void gcode_G28() {
         #endif
 
         #if ENABLED(I2C_AXIS_ENCODERS)
-          initialise_encoders();
+          set_encoder_homed(X_AXIS);
         #endif
       }
 
@@ -6245,6 +6247,9 @@ void process_next_command() {
       case 862: // M999: Restart after being Stopped
         gcode_M862();
         break;
+      case 863: // M999: Restart after being Stopped
+        gcode_M863();
+        break;
       case 865: // M999: Restart after being Stopped
         gcode_M865();
         break;
@@ -7284,57 +7289,87 @@ void calculate_volumetric_multipliers() {
 
   long encoder_offset[4] = {0};
 
-  inline void gcode_M860() { check_axis_errors(); }
-  inline void gcode_M861() { report_encoder_positions(); }
-  inline void gcode_M862 () { report_encoder_positions_mm(); }
+  inline void gcode_M860() { correct_axis_errors(); }
+  inline void gcode_M861() { check_axis_errors(); }
+  inline void gcode_M862() { report_encoder_positions(); }
+  inline void gcode_M863 () { report_encoder_positions_mm(); }
   inline void gcode_M865 () {
-    byte ledMode = 0;
-    byte ledBrightness = 50;
+    int ledMode[] = {0,0};
+    byte ledBrightness[] = {50,50};
 
-    if (code_seen('M')) {
-      ledMode = (byte) code_value_short();
+    if (code_seen('M1')) {
+      ledMode[0] = code_value_short();
     }
-    if (code_seen('B')) {
-      ledBrightness = (byte) code_value_short();
+    if (code_seen('M2')) {
+      ledMode[1] = code_value_short();
     }
 
     SERIAL_ECHO("Setting to Mode ");
-    SERIAL_ECHO(ledMode);
-    SERIAL_ECHO(", Brightness ");
-    SERIAL_ECHOLN(ledBrightness);
+    SERIAL_ECHO(ledMode[0]);
+    SERIAL_ECHO(" & ");
+    SERIAL_ECHOLN(ledMode[1]);
 
-    set_encoder_light_mode(X_AXIS,ledMode,ledBrightness); 
+    set_encoder_light_mode(X_AXIS,(byte) ledMode[0],(byte) ledMode[1]); 
+
+  }
+
+  inline void gcode_M866 () {
+    int ledBrightness[] = {50,50};
+
+    if (code_seen('B1')) {
+      ledBrightness[0] = code_value_short();
+    }
+    if (code_seen('B2')) {
+      ledBrightness[1] = code_value_short();
+    }
+
+    SERIAL_ECHO("Setting to brightness ");
+    SERIAL_ECHO(ledBrightness[0]);
+    SERIAL_ECHO(" & ");
+    SERIAL_ECHOLN(ledBrightness[1]);
+
+    set_encoder_light_brightness(X_AXIS,(byte) ledBrightness[0],(byte) ledBrightness[1]); 
 
   }
 
 
   //call when printer is homed to 0,0,0 etc to initialise starting points
-  void initialise_encoders() {
+  void i2c_encoder_init() {
     Wire.begin();
     SERIAL_ECHOLN("Initialising encoders");
   	#ifdef I2C_ENCODER_ADDR_X
-  		encoder_offset[X_AXIS] = get_axis_encoder_count(X_AXIS);
-      SERIAL_ECHO("Initial X offset of ");
-      SERIAL_ECHOLN(encoder_offset[X_AXIS]);
-      set_encoder_light_mode(X_AXIS,1,255);
+      set_encoder_light_mode(X_AXIS,1,0);
+      set_encoder_light_brightness(X_AXIS,255,10);
   	#endif
   }
 
-  void check_axis_errors() {
+  void set_encoder_homed(AxisEnum axis) {
 
+        encoder_offset[axis] = get_axis_encoder_count(axis);
+        SERIAL_ECHO("Initial axis offset of ");
+        SERIAL_ECHOLN(encoder_offset[axis]);
+
+  }
+
+  void check_axis_errors() {
   	#if ENABLED(ERROR_CORRECT_X)
   		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
   	#endif
+  }
+
+  void correct_axis_errors() {
+
+    #if ENABLED(ERROR_CORRECT_X)
+      axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+    #endif
 
 
-  	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
-  		SERIAL_ECHOLN("Error severe, abort!");
-  	}
-  	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
-  	{
-  		//SERIAL_ECHOLN("Correcting error.");
-
-    	//double current_position[AXIS_NUM] = {0};
+    if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
+      SERIAL_ECHOLN("Error severe, abort!");
+    }
+    else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+    {
+      //SERIAL_ECHOLN("Correcting error.");
 
       current_position[X_AXIS] = st_get_position_mm(X_AXIS);
       current_position[Y_AXIS] = st_get_position_mm(Y_AXIS);
@@ -7352,11 +7387,6 @@ void calculate_volumetric_multipliers() {
 
       long X_corrected_steps = X_current_steps + (axisError[X_AXIS] * axis_steps_per_unit[X_AXIS]);
 
-      //SERIAL_ECHO("X Steps were: ");
-      //SERIAL_ECHOLN(X_current_steps);
-      //SERIAL_ECHO("X Steps now:  ");
-      //SERIAL_ECHOLN(X_corrected_steps);
-
       //Move to offset error
 
       setup_for_endstop_move();
@@ -7365,7 +7395,6 @@ void calculate_volumetric_multipliers() {
 
 
       destination[X_AXIS] = tempDest-axisError[X_AXIS];
-      //SERIAL_ECHOLN(destination[X_AXIS]);
 
       feedrate = min(homing_feedrate[X_AXIS], homing_feedrate[Y_AXIS]);
       line_to_destination();
@@ -7380,7 +7409,7 @@ void calculate_volumetric_multipliers() {
 
       axisError[X_AXIS] = calculate_axis_error(X_AXIS);
 
-  	}
+    }
 
   }
 
@@ -7400,7 +7429,6 @@ void calculate_volumetric_multipliers() {
     SERIAL_ECHOLN(error);
 
   	return error;
-
   }
 
   void report_encoder_positions_mm() {
@@ -7445,24 +7473,25 @@ void calculate_volumetric_multipliers() {
     	}
 
       sum += encoderCount.val;
-
       delay(ENCODER_READINGS_DEL);
-
     }
-
 
     return sum / ENCODER_READINGS_AVG;
   }
 
-  void set_encoder_light_mode(AxisEnum axis, byte mode, byte brightness) {
+  void set_encoder_light_mode(AxisEnum axis, byte mode1, byte mode2) {
     Wire.beginTransmission(get_encoder_axis_address(axis));
-    Wire.write(5);
-    Wire.write(mode);
+    Wire.write(10);
+    Wire.write(mode1);
+    Wire.write(mode2);
     Wire.endTransmission();
+  }
 
+  void set_encoder_light_brightness(AxisEnum axis, byte brt1, byte brt2) {
     Wire.beginTransmission(get_encoder_axis_address(axis));
-    Wire.write(3);
-    Wire.write(brightness);
+    Wire.write(11);
+    Wire.write(brt1);
+    Wire.write(brt2);
     Wire.endTransmission();
   }
 
