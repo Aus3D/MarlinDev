@@ -694,7 +694,9 @@ void setup() {
   st_init();    // Initialize stepper, this enables interrupts!
   setup_photpin();
   servo_init();
-  i2c_encoder_init();
+  #if ENABLED(I2C_AXIS_ENCODERS)
+    i2c_encoder_init();
+  #endif
 
 
   #if HAS_CONTROLLERFAN
@@ -7264,9 +7266,12 @@ void calculate_volumetric_multipliers() {
 
 #if ENABLED(I2C_AXIS_ENCODERS)
 
+  //External defines (should go in config file later)
+
   #define I2C_ENCODER_ADDR_X 30
   //#define I2C_ENCODER_ADDR_Y 31
   //#define I2C_ENCODER_ADDR_Z 32  
+  //#define I2C_ENCODER_ADDR_E 33  
 
   #define ENCODER_TICKS_PER_MM 2048
 
@@ -7280,69 +7285,211 @@ void calculate_volumetric_multipliers() {
   //#define ERROR_CORRECT_Y
   //#define ERROR_CORRECT_Z
 
+  #define X_AXIS_LM_1 1
+  #define X_AXIS_LM_2 0
+  #define X_AXIS_BR_1 255
+  #define X_AXIS_BR_2 10
+
+  //internal defines (should probably stay here?)
+  #define I2C_MAG_SIG_GOOD 0
+  #define I2C_MAG_SIG_MID 1
+  #define I2C_MAG_SIG_BAD 2
+
   typedef union{
       volatile long val = 0;
       byte bval[4];
   }i2cLong;
 
-  double axisError[3] = {0};
-
+  double axisError[4] = {0};
   long encoder_offset[4] = {0};
 
   inline void gcode_M860() { correct_axis_errors(); }
   inline void gcode_M861() { check_axis_errors(); }
-  inline void gcode_M862() { report_encoder_positions(); }
-  inline void gcode_M863 () { report_encoder_positions_mm(); }
-  inline void gcode_M865 () {
-    int ledMode[] = {0,0};
-    byte ledBrightness[] = {50,50};
 
-    if (code_seen('M1')) {
-      ledMode[0] = code_value_short();
+  //report axis position in encoder ticks
+  inline void gcode_M862() { 
+    bool showOne = false;
+
+    if (code_seen('X')) {
+      report_encoder_positions(X_AXIS);
+      showOne = true;
     }
-    if (code_seen('M2')) {
-      ledMode[1] = code_value_short();
+    if (code_seen('Y')) {
+      report_encoder_positions(Y_AXIS);
+      showOne = true;
     }
+    if (code_seen('Z')) {
+      report_encoder_positions(Z_AXIS);
+      showOne = true;
+    }
+    if (code_seen('E')) {
+      report_encoder_positions(E_AXIS);
+      showOne = true;
+    } 
 
-    SERIAL_ECHO("Setting to Mode ");
-    SERIAL_ECHO(ledMode[0]);
-    SERIAL_ECHO(" & ");
-    SERIAL_ECHOLN(ledMode[1]);
+    //if no axis specified show for all enabled axes
+    if(!showOne) {
+      report_encoder_positions(X_AXIS);
+      report_encoder_positions(Y_AXIS);
+      report_encoder_positions(Z_AXIS);
+      report_encoder_positions(E_AXIS);
+    }
+   }
 
-    set_encoder_light_mode(X_AXIS,(byte) ledMode[0],(byte) ledMode[1]); 
+  //report axis position in mm
+  inline void gcode_M863 () { 
+    bool showOne = false;
 
+    if (code_seen('X')) {
+      report_encoder_positions_mm(X_AXIS);
+      showOne = true;
+    }
+    if (code_seen('Y')) {
+      report_encoder_positions_mm(Y_AXIS);
+      showOne = true;
+    }
+    if (code_seen('Z')) {
+      report_encoder_positions_mm(Z_AXIS);
+      showOne = true;
+    }
+    if (code_seen('E')) {
+      report_encoder_positions_mm(E_AXIS);
+      showOne = true;
+    } 
+
+    //if no axis specified show for all enabled axes
+    if(!showOne) {
+      report_encoder_positions_mm(X_AXIS);
+      report_encoder_positions_mm(Y_AXIS);
+      report_encoder_positions_mm(Z_AXIS);
+      report_encoder_positions_mm(E_AXIS);
+    }
   }
 
+  //set module LED modes for a given axis
+  inline void gcode_M865 () {
+    int ledMode[] = {0,0};
+
+    AxisEnum axis;
+    bool proceed = true;
+
+    if (code_seen('X')) {
+      axis = X_AXIS;
+    } else if (code_seen('Y')) {
+      axis = Y_AXIS;
+    } else if (code_seen('Z')) {
+      axis = Z_AXIS;
+    } else if (code_seen('E')) {
+      axis = E_AXIS;
+    } else {
+      SERIAL_ECHO("Please specify axis!");
+      proceed = false;
+    }
+
+    if(proceed) {
+      if (code_seen('M1')) {
+        ledMode[0] = code_value_short();
+      }
+      if (code_seen('M2')) {
+        ledMode[1] = code_value_short();
+      }
+
+      SERIAL_ECHO("Setting to Mode ");
+      SERIAL_ECHO(ledMode[0]);
+      SERIAL_ECHO(" & ");
+      SERIAL_ECHOLN(ledMode[1]);
+
+      set_encoder_light_mode(axis,(byte) ledMode[0],(byte) ledMode[1]); 
+    }
+  }
+
+  //set module LED brightnesses for a given axis
   inline void gcode_M866 () {
     int ledBrightness[] = {50,50};
 
-    if (code_seen('B1')) {
-      ledBrightness[0] = code_value_short();
+    AxisEnum axis;
+    bool proceed = true;
+
+    if (code_seen('X')) {
+      axis = X_AXIS;
+    } else if (code_seen('Y')) {
+      axis = Y_AXIS;
+    } else if (code_seen('Z')) {
+      axis = Z_AXIS;
+    } else if (code_seen('E')) {
+      axis = E_AXIS;
+    } else {
+      SERIAL_ECHO("Please specify axis!");
+      proceed = false;
     }
-    if (code_seen('B2')) {
-      ledBrightness[1] = code_value_short();
+
+    if(proceed) {
+      if (code_seen('B1')) {
+        ledBrightness[0] = code_value_short();
+      }
+      if (code_seen('B2')) {
+        ledBrightness[1] = code_value_short();
+      }
+
+      SERIAL_ECHO("Setting to brightness ");
+      SERIAL_ECHO(ledBrightness[0]);
+      SERIAL_ECHO(" & ");
+      SERIAL_ECHOLN(ledBrightness[1]);
+
+      set_encoder_light_brightness(axis,(byte) ledBrightness[0],(byte) ledBrightness[1]); 
     }
-
-    SERIAL_ECHO("Setting to brightness ");
-    SERIAL_ECHO(ledBrightness[0]);
-    SERIAL_ECHO(" & ");
-    SERIAL_ECHOLN(ledBrightness[1]);
-
-    set_encoder_light_brightness(X_AXIS,(byte) ledBrightness[0],(byte) ledBrightness[1]); 
-
   }
 
-
-  //call when printer is homed to 0,0,0 etc to initialise starting points
+  //called at startup to start I2C comms, checks magnetic field strength and reports any problems 
+  //also sets any lighting preferences as defined in configuration
   void i2c_encoder_init() {
     Wire.begin();
     SERIAL_ECHOLN("Initialising encoders");
+
   	#ifdef I2C_ENCODER_ADDR_X
-      set_encoder_light_mode(X_AXIS,1,0);
-      set_encoder_light_brightness(X_AXIS,255,10);
+      encoder_magnetic_strength_test(X_AXIS);
+      #if defined(X_AXIS_LM_1) && defined(X_AXIS_LM_2)
+        set_encoder_light_mode(X_AXIS,X_AXIS_LM_1,X_AXIS_LM_2);
+      #endif
+      #if defined(X_AXIS_BR_1) && defined(X_AXIS_BR_2)
+      set_encoder_light_brightness(X_AXIS,X_AXIS_BR_1,X_AXIS_BR_2);
+      #endif
   	#endif
+
+    #ifdef I2C_ENCODER_ADDR_Y
+      encoder_magnetic_strength_test(Y_AXIS);
+      #if defined(Y_AXIS_LM_1) && defined(Y_AXIS_LM_2)
+        set_encoder_light_mode(Y_AXIS,Y_AXIS_LM_1,Y_AXIS_LM_2);
+      #endif
+      #if defined(Y_AXIS_BR_1) && defined(Y_AXIS_BR_2)
+      set_encoder_light_brightness(Y_AXIS,Y_AXIS_BR_1,Y_AXIS_BR_2);
+      #endif
+    #endif
+
+    #ifdef I2C_ENCODER_ADDR_Z
+      encoder_magnetic_strength_test(Z_AXIS);
+      #if defined(Z_AXIS_LM_1) && defined(Z_AXIS_LM_2)
+        set_encoder_light_mode(Z_AXIS,Z_AXIS_LM_1,Z_AXIS_LM_2);
+      #endif
+      #if defined(Z_AXIS_BR_1) && defined(Z_AXIS_BR_2)
+      set_encoder_light_brightness(Z_AXIS,Z_AXIS_BR_1,Z_AXIS_BR_2);
+      #endif
+    #endif
+
+    #ifdef I2C_ENCODER_ADDR_E
+     encoder_magnetic_strength_test(E_AXIS);
+      #if defined(E_AXIS_LM_1) && defined(E_AXIS_LM_2)
+        set_encoder_light_mode(E_AXIS,E_AXIS_LM_1,E_AXIS_LM_2);
+      #endif
+      #if defined(E_AXIS_BR_1) && defined(E_AXIS_BR_2)
+      set_encoder_light_brightness(E_AXIS,E_AXIS_BR_1,E_AXIS_BR_2);
+      #endif
+    #endif
+
+
   }
 
+  //call when axis is homed to 0 to initialise starting point
   void set_encoder_homed(AxisEnum axis) {
 
         encoder_offset[axis] = get_axis_encoder_count(axis);
@@ -7418,33 +7565,92 @@ void calculate_volumetric_multipliers() {
 
     float target, actual, error;
 
-    target = st_get_position_mm(X_AXIS);
+    target = st_get_position_mm(axis);
     actual = calculate_encoder_position_mm(axis);
     error =  actual - target;
-    SERIAL_ECHO("Target: ");
+    SERIAL_ECHO(get_axis_letter(axis));
+    SERIAL_ECHO(" Target: ");
     SERIAL_ECHOLN(target);
-    SERIAL_ECHO("Actual: ");
+    SERIAL_ECHO(get_axis_letter(axis));
+    SERIAL_ECHO(" Actual: ");
     SERIAL_ECHOLN(actual);
-    SERIAL_ECHO("Error : ");
+    SERIAL_ECHO(get_axis_letter(axis));
+    SERIAL_ECHO(" Error : ");
     SERIAL_ECHOLN(error);
 
   	return error;
   }
 
-  void report_encoder_positions_mm() {
-    #ifdef I2C_ENCODER_ADDR_X
-      SERIAL_ECHO("X Axis position: ");
-      SERIAL_ECHO(calculate_encoder_position_mm(X_AXIS));
-      SERIAL_ECHOLN("mm.");
-    #endif
+  void report_encoder_positions_mm(AxisEnum axis) {
+    switch(axis) {
+      #ifdef I2C_ENCODER_ADDR_X
+        case X_AXIS:
+          SERIAL_ECHO("X Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position_mm(X_AXIS));
+          SERIAL_ECHOLN("mm.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_Y
+        case Y_AXIS:
+          SERIAL_ECHO("Y Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position_mm(Y_AXIS));
+          SERIAL_ECHOLN("mm.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_Z
+        case Z_AXIS:
+          SERIAL_ECHO("Z Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position_mm(Z_AXIS));
+          SERIAL_ECHOLN("mm.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_E
+        case E_AXIS:
+          SERIAL_ECHO("E Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position_mm(E_AXIS));
+          SERIAL_ECHOLN("mm.");
+          break;
+      #endif  
+    }   
   }
 
-  void report_encoder_positions() {
-    #ifdef I2C_ENCODER_ADDR_X
-      SERIAL_ECHO("X Axis position: ");
-      SERIAL_ECHO(calculate_encoder_position(X_AXIS));
-      SERIAL_ECHOLN(" ticks.");
-    #endif
+  void report_encoder_positions(AxisEnum axis) {
+    switch(axis) {
+      #ifdef I2C_ENCODER_ADDR_X
+        case X_AXIS:
+          SERIAL_ECHO("X Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position(X_AXIS));
+          SERIAL_ECHOLN(" ticks.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_Y
+        case Y_AXIS:
+          SERIAL_ECHO("Y Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position(Y_AXIS));
+          SERIAL_ECHOLN(" ticks.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_Z
+        case Z_AXIS:
+          SERIAL_ECHO("Z Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position(Z_AXIS));
+          SERIAL_ECHOLN(" ticks.");
+          break;
+      #endif  
+
+      #ifdef I2C_ENCODER_ADDR_E
+        case E_AXIS:
+          SERIAL_ECHO("E Axis position: ");
+          SERIAL_ECHO(calculate_encoder_position(E_AXIS));
+          SERIAL_ECHOLN(" ticks.");
+          break;
+      #endif  
+    }    
   }
 
   double calculate_encoder_position_mm(AxisEnum axis) {
@@ -7495,6 +7701,45 @@ void calculate_volumetric_multipliers() {
     Wire.endTransmission();
   }
 
+  bool encoder_magnetic_strength_test(AxisEnum axis) {
+    byte magStrength = get_encoder_magnetic_strength(axis);
+
+    if(magStrength == I2C_MAG_SIG_BAD) {
+      SERIAL_ECHO("Warning, ");
+      SERIAL_ECHO(get_axis_letter(axis));
+      SERIAL_ECHOLN(" axis magnetic strip not detected!");
+
+      return false;
+    } else { 
+      SERIAL_ECHO(get_axis_letter(axis));
+      SERIAL_ECHOLN(" axis encoder passes test.");
+      return true; 
+    }
+
+  }
+
+  byte get_encoder_magnetic_strength(AxisEnum axis) {
+
+    //Set module to report magnetic strength
+    Wire.beginTransmission(get_encoder_axis_address(axis));
+    Wire.write(3);
+    Wire.write(1);
+    Wire.endTransmission();
+
+    //Read value
+    Wire.requestFrom(get_encoder_axis_address(axis),1);
+
+    byte reading = Wire.read();
+
+    //Set module back to normal (distance) mode
+    Wire.beginTransmission(get_encoder_axis_address(axis));
+    Wire.write(3);
+    Wire.write(0);
+    Wire.endTransmission();
+
+    return reading;
+  }
+
   int get_encoder_axis_address(AxisEnum axis) {
     int addr=0;
 
@@ -7522,6 +7767,21 @@ void calculate_volumetric_multipliers() {
     }
 
     return addr;
+  }
+
+  //This probably already exists in a much cleverer form that I can't find or figure out
+  //Temporary placeholder until I find it and feel like an idiot
+  char get_axis_letter(AxisEnum axis) {
+    switch (axis) {
+      case X_AXIS:
+        return 'X';
+      case Y_AXIS:
+        return 'Y';
+      case Z_AXIS:
+        return 'Z';
+      case E_AXIS:
+        return 'E';
+    }
   }
 
 #endif

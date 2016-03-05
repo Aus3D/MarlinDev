@@ -367,14 +367,17 @@ void i2c_encoder_init();
 void check_axis_errors();
 void correct_axis_errors();
 void set_encoder_homed(AxisEnum);
-void report_encoder_positions();
-void report_encoder_positions_mm();
+void report_encoder_positions(AxisEnum);
+void report_encoder_positions_mm(AxisEnum);
 double calculate_axis_error(AxisEnum);
 double calculate_encoder_position_mm(AxisEnum);
 long calculate_encoder_position(AxisEnum);
 long get_axis_encoder_count(AxisEnum);
 void set_encoder_light_mode(AxisEnum,byte,byte);
 void set_encoder_light_brightness(AxisEnum,byte,byte);
+bool encoder_magnetic_strength_test(AxisEnum);
+byte get_encoder_magnetic_strength(AxisEnum);
 int get_encoder_axis_address(AxisEnum);
+char get_axis_letter(AxisEnum);
 
 #endif //MARLIN_H
