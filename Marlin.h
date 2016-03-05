@@ -357,4 +357,20 @@ extern uint8_t active_extruder;
 
 extern void calculate_volumetric_multipliers();
 
+//call when printer is homed to 0,0,0 etc to initialise starting points
+void gcode_M860();
+void gcode_M861();
+void gcode_M862();
+void gcode_M865();
+void initialise_encoders();
+void check_axis_errors();
+void report_encoder_positions();
+void report_encoder_positions_mm();
+double calculate_axis_error(AxisEnum);
+double calculate_encoder_position_mm(AxisEnum);
+long calculate_encoder_position(AxisEnum);
+long get_axis_encoder_count(AxisEnum);
+void set_encoder_light_mode(AxisEnum,byte,byte);
+int get_encoder_axis_address(AxisEnum);
+
 #endif //MARLIN_H

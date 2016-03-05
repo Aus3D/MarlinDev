@@ -17,6 +17,9 @@
     or, you could define it here *
  */
 
+    
+#define I2C_AXIS_ENCODERS
+
 #if 0
 
   // You can obtain a unique id by visiting https://www.uuidgenerator.net/version4
@@ -37,7 +40,7 @@
 #if 0
   // If you are still using a configuration file from Marlin 1.1, you could simply include it.
 
-  #include "configurations/deprecated_configurations/delta/kossel_pro/Configuration.h"
+  #include "configurations/vendor/Aus3D/Configuration.h"
 
 #endif
 

@@ -68,6 +68,8 @@
   #include <SPI.h>
 #endif
 
+#include "Wire.h"
+
 /**
  * Look here for descriptions of G-codes:
  *  - http://linuxcnc.org/handbook/gcode/g-code.html
@@ -218,6 +220,7 @@
  * ************ Custom codes - This can change to suit future G-code regulations
  * M100 - Watch Free Memory (For Debugging Only)
  * M851 - Set Z probe's Z offset (mm above extruder -- The value will always be negative)
+ * M860 - Check for encoder error on enabled axes and move to correct error
 
 
  * M928 - Start SD logging (M928 filename.g) - ended by M29
@@ -2355,13 +2358,7 @@ inline void gcode_G28() {
         set_axis_is_at_home(X_AXIS);
         set_axis_is_at_home(Y_AXIS);
 
-        #if ENABLED(I2C_AXIS_ENCODERS)
-        	initialise_encoders();
-        #endif
-
         sync_plan_position();
-
-
 
         #if ENABLED(DEBUG_LEVELING_FEATURE)
           if (marlin_debug_flags & DEBUG_LEVELING) {
@@ -2386,6 +2383,10 @@ inline void gcode_G28() {
           if (marlin_debug_flags & DEBUG_LEVELING) {
             print_xyz("> QUICK_HOME > current_position 2", current_position);
           }
+        #endif
+
+        #if ENABLED(I2C_AXIS_ENCODERS)
+          initialise_encoders();
         #endif
       }
 
@@ -6234,6 +6235,21 @@ void process_next_command() {
 
       #endif // HAS_MICROSTEPS
 
+      #if ENABLED(I2C_AXIS_ENCODERS)
+      case 860: // M999: Restart after being Stopped
+        gcode_M860();
+        break;
+      case 861: // M999: Restart after being Stopped
+        gcode_M861();
+        break;
+      case 862: // M999: Restart after being Stopped
+        gcode_M862();
+        break;
+      case 865: // M999: Restart after being Stopped
+        gcode_M865();
+        break;
+      #endif
+
       case 999: // M999: Restart after being Stopped
         gcode_M999();
         break;
@@ -7239,117 +7255,245 @@ void calculate_volumetric_multipliers() {
 
 /////////////////////////////////////////////////////////////
 
-#define I2C_AXIS_ENCODERS
+//#define I2C_AXIS_ENCODERS
 
-#define I2C_ENCODER_ADDR_X 30
-//#define I2C_ENCODER_ADDR_Y 31
-//#define I2C_ENCODER_ADDR_Z 32  
+#if ENABLED(I2C_AXIS_ENCODERS)
 
-#define ENCODER_TICKS_PER_MM 2048
+  #define I2C_ENCODER_ADDR_X 30
+  //#define I2C_ENCODER_ADDR_Y 31
+  //#define I2C_ENCODER_ADDR_Z 32  
 
-#define AXIS_ERROR_THRESHOLD_ABORT 200	//number of steps error in any given axis after which the printer will abort
-#define AXIS_ERROR_THRESHOLD_CORRECT 1	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
+  #define ENCODER_TICKS_PER_MM 2048
 
-#define ERROR_CORRECT_X
-//#define ERROR_CORRECT_Y
-//#define ERROR_CORRECT_Z
+  #define ENCODER_READINGS_AVG 10
+  #define ENCODER_READINGS_DEL 25
 
-typedef union{
-    volatile long val = 0;
-    byte bval[4];
-}i2cLong;
+  #define AXIS_ERROR_THRESHOLD_ABORT 100.0	//number of steps error in any given axis after which the printer will abort
+  #define AXIS_ERROR_THRESHOLD_CORRECT 0.10	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
 
-i2cLong encoderCount;
+  #define ERROR_CORRECT_X
+  //#define ERROR_CORRECT_Y
+  //#define ERROR_CORRECT_Z
 
-double axisError[3] = {0};
+  typedef union{
+      volatile long val = 0;
+      byte bval[4];
+  }i2cLong;
 
-long encoder_offset[4] = {0};
+  double axisError[3] = {0};
 
-//call when printer is homed to 0,0,0 etc to initialise starting points
-void initialise_encoders() {
-	#if ENABLED(I2C_ENCODER_ADDR_X)
-		encoder_offset[X_AXIS] = get_axis_encoder_count(X_AXIS);
-	#endif
-}
+  long encoder_offset[4] = {0};
 
-void check_axis_errors() {
+  inline void gcode_M860() { check_axis_errors(); }
+  inline void gcode_M861() { report_encoder_positions(); }
+  inline void gcode_M862 () { report_encoder_positions_mm(); }
+  inline void gcode_M865 () {
+    byte ledMode = 0;
+    byte ledBrightness = 50;
 
-	#if ENABLED(ERROR_CORRECT)
-		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
-		SERIAL_ECHO("X axis error of ");
-		SERIAL_ECHO(axisError[X_AXIS]);
-		SERIAL_ECHOLN("mm.");
-	#endif
+    if (code_seen('M')) {
+      ledMode = (byte) code_value_short();
+    }
+    if (code_seen('B')) {
+      ledBrightness = (byte) code_value_short();
+    }
+
+    SERIAL_ECHO("Setting to Mode ");
+    SERIAL_ECHO(ledMode);
+    SERIAL_ECHO(", Brightness ");
+    SERIAL_ECHOLN(ledBrightness);
+
+    set_encoder_light_mode(X_AXIS,ledMode,ledBrightness); 
+
+  }
 
 
-	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
-		SERIAL_ECHOLN("Error severe, abort!");
-	}
-	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT))
-	{
-		SERIAL_ECHOLN("Correcting error.");
-    	double X_current = st_get_position_mm(X_AXIS),
-	       	Y_current = st_get_position_mm(Y_AXIS),
-	       	Z_current = st_get_position_mm(Z_AXIS),
-	       	E_current = st_get_position_mm(E_AXIS);
+  //call when printer is homed to 0,0,0 etc to initialise starting points
+  void initialise_encoders() {
+    Wire.begin();
+    SERIAL_ECHOLN("Initialising encoders");
+  	#ifdef I2C_ENCODER_ADDR_X
+  		encoder_offset[X_AXIS] = get_axis_encoder_count(X_AXIS);
+      SERIAL_ECHO("Initial X offset of ");
+      SERIAL_ECHOLN(encoder_offset[X_AXIS]);
+      set_encoder_light_mode(X_AXIS,1,255);
+  	#endif
+  }
 
-	    double axis_moveto[3]  = {X_current, Y_current, Z_current};
+  void check_axis_errors() {
 
-       	st_synchronize();
+  	#if ENABLED(ERROR_CORRECT_X)
+  		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+  	#endif
 
-       	plan_buffer_line(X_current, Y_current, Z_start_location, E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
-       	st_synchronize();
 
-		//for(int i = 0; i < 3; i++) {
-		//	if(abs(axisError[i]) >= AXIS_ERROR_THRESHOLD_CORRECT) {
-		//		axis_moveto[i] += axisError[i];
-		//	}
-		//}
+  	if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
+  		SERIAL_ECHOLN("Error severe, abort!");
+  	}
+  	else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+  	{
+  		//SERIAL_ECHOLN("Correcting error.");
 
-       	axis_moveto[X_AXIS] += axisError[X_AXIS];
+    	//double current_position[AXIS_NUM] = {0};
 
-		plan_buffer_line(axis_moveto[X_AXIS], axis_moveto[Y_AXIS], axis_moveto[Z_AXIS], E_current, homing_feedrate[Z_AXIS] / 60, active_extruder);
-       	st_synchronize();
+      current_position[X_AXIS] = st_get_position_mm(X_AXIS);
+      current_position[Y_AXIS] = st_get_position_mm(Y_AXIS);
+      current_position[Z_AXIS] = st_get_position_mm(Z_AXIS);
+      current_position[E_AXIS] = st_get_position_mm(E_AXIS);
 
-	}
+      float tempDest = current_position[X_AXIS];
 
-}
+      long X_current_steps = st_get_position(X_AXIS),
+          Y_current_steps = st_get_position(Y_AXIS),
+          Z_current_steps = st_get_position(Z_AXIS),
+          E_current_steps = st_get_position(E_AXIS);
 
-//returns error in terms of mm
-double calculate_axis_error(int axis) {
-	return calculate_encoder_position_mm(axis) - st_get_position_mm(axis);
-}
+      long tempSteps = X_current_steps;
 
-double calculate_encoder_position_mm(int axis) {
-	return (float) (get_axis_encoder_count(axis) - encoder_offset[axis]) / ENCODER_TICKS_PER_MM;
-}
+      long X_corrected_steps = X_current_steps + (axisError[X_AXIS] * axis_steps_per_unit[X_AXIS]);
 
-long get_axis_encoder_count(int axis) {
-	byte addr = 0;
+      //SERIAL_ECHO("X Steps were: ");
+      //SERIAL_ECHOLN(X_current_steps);
+      //SERIAL_ECHO("X Steps now:  ");
+      //SERIAL_ECHOLN(X_corrected_steps);
 
-	switch(axis) {
-		case X_AXIS:
-			addr = I2C_ENCODER_ADDR_X;
-			break;
-		case Y_AXIS:
-			addr = I2C_ENCODER_ADDR_Y;
-			break;
-		case Z_AXIS:
-			addr = I2C_ENCODER_ADDR_Z;
-			break;
-		case E_AXIS:
-			addr = I2C_ENCODER_ADDR_E;
-			break;
-	}
+      //Move to offset error
 
-	Wire.requestFrom(addr,4);
+      setup_for_endstop_move();
+      set_destination_to_current();
+      sync_plan_position();
 
-	byte index = 0;
 
-	while (Wire.available()) {
-		byte a = Wire.read();
-		encoderCount.bval[index] = a;
-		index += 1;
-	}
-}
+      destination[X_AXIS] = tempDest-axisError[X_AXIS];
+      //SERIAL_ECHOLN(destination[X_AXIS]);
+
+      feedrate = min(homing_feedrate[X_AXIS], homing_feedrate[Y_AXIS]);
+      line_to_destination();
+      st_synchronize();
+      prepare_move();
+      st_synchronize();
+
+      //Update position to 
+
+      st_set_position(tempSteps,Y_current_steps,Z_current_steps,E_current_steps); 
+      st_synchronize();
+
+      axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+
+  	}
+
+  }
+
+  //returns error in terms of mm
+  double calculate_axis_error(AxisEnum axis) {
+
+    float target, actual, error;
+
+    target = st_get_position_mm(X_AXIS);
+    actual = calculate_encoder_position_mm(axis);
+    error =  actual - target;
+    SERIAL_ECHO("Target: ");
+    SERIAL_ECHOLN(target);
+    SERIAL_ECHO("Actual: ");
+    SERIAL_ECHOLN(actual);
+    SERIAL_ECHO("Error : ");
+    SERIAL_ECHOLN(error);
+
+  	return error;
+
+  }
+
+  void report_encoder_positions_mm() {
+    #ifdef I2C_ENCODER_ADDR_X
+      SERIAL_ECHO("X Axis position: ");
+      SERIAL_ECHO(calculate_encoder_position_mm(X_AXIS));
+      SERIAL_ECHOLN("mm.");
+    #endif
+  }
+
+  void report_encoder_positions() {
+    #ifdef I2C_ENCODER_ADDR_X
+      SERIAL_ECHO("X Axis position: ");
+      SERIAL_ECHO(calculate_encoder_position(X_AXIS));
+      SERIAL_ECHOLN(" ticks.");
+    #endif
+  }
+
+  double calculate_encoder_position_mm(AxisEnum axis) {
+  	return (float) calculate_encoder_position(axis) / ENCODER_TICKS_PER_MM;
+  }
+
+  long calculate_encoder_position(AxisEnum axis) {
+    return get_axis_encoder_count(axis) - encoder_offset[axis];
+  }
+
+  long get_axis_encoder_count(AxisEnum axis) {
+    i2cLong encoderCount;
+
+    long sum = 0;
+
+    for(int i = 0; i < ENCODER_READINGS_AVG; i++) {
+
+    	Wire.requestFrom(get_encoder_axis_address(axis),4);
+
+    	byte index = 0;
+
+    	while (Wire.available()) {
+    		byte a = Wire.read();
+    		encoderCount.bval[index] = a;
+    		index += 1;
+    	}
+
+      sum += encoderCount.val;
+
+      delay(ENCODER_READINGS_DEL);
+
+    }
+
+
+    return sum / ENCODER_READINGS_AVG;
+  }
+
+  void set_encoder_light_mode(AxisEnum axis, byte mode, byte brightness) {
+    Wire.beginTransmission(get_encoder_axis_address(axis));
+    Wire.write(5);
+    Wire.write(mode);
+    Wire.endTransmission();
+
+    Wire.beginTransmission(get_encoder_axis_address(axis));
+    Wire.write(3);
+    Wire.write(brightness);
+    Wire.endTransmission();
+  }
+
+  int get_encoder_axis_address(AxisEnum axis) {
+    int addr=0;
+
+    switch(axis) {
+      #ifdef I2C_ENCODER_ADDR_X
+      case X_AXIS:
+        addr = I2C_ENCODER_ADDR_X;
+        break;
+      #endif  
+      #if ENABLED(I2C_ENCODER_ADDR_Y)
+      case Y_AXIS:
+        addr = I2C_ENCODER_ADDR_Y;
+        break;
+      #endif    
+      #if ENABLED(I2C_ENCODER_ADDR_Z)
+      case Z_AXIS:
+        addr = I2C_ENCODER_ADDR_Z;
+        break;
+      #endif  
+      #if ENABLED(I2C_ENCODER_ADDR_E)
+      case E_AXIS:
+        addr = I2C_ENCODER_ADDR_E;
+        break;
+      #endif  
+    }
+
+    return addr;
+  }
+
+#endif
 
