@@ -6255,6 +6255,9 @@ void process_next_command() {
       case 865: // M999: Restart after being Stopped
         gcode_M865();
         break;
+      case 866: // M999: Restart after being Stopped
+        gcode_M866();
+        break;
       #endif
 
       case 999: // M999: Restart after being Stopped

@@ -363,6 +363,7 @@ void gcode_M861();
 void gcode_M862();
 void gcode_M863();
 void gcode_M865();
+void gcode_M866();
 void i2c_encoder_init();
 void check_axis_errors();
 void correct_axis_errors();
