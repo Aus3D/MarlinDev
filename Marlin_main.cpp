@@ -6258,6 +6258,9 @@ void process_next_command() {
       case 866: // M999: Restart after being Stopped
         gcode_M866();
         break;
+      case 867: // M999: Restart after being Stopped
+        gcode_M867();
+        break;
       #endif
 
       case 999: // M999: Restart after being Stopped
@@ -7443,6 +7446,52 @@ void calculate_volumetric_multipliers() {
     }
   }
 
+  //calculate steps per mm based off of encoder measurements
+  inline void gcode_M867 () {
+    AxisEnum axis;
+    bool proceed = true;
+    int iterations = 1;
+
+    if (code_seen('X')) {
+      axis = X_AXIS;
+    } else if (code_seen('Y')) {
+      axis = Y_AXIS;
+    } else if (code_seen('Z')) {
+      axis = Z_AXIS;
+    } else if (code_seen('E')) {
+      axis = E_AXIS;
+    } else {
+      SERIAL_ECHOLN("Please specify axis!");
+      proceed = false;
+    }
+
+    if(proceed) {
+      if (code_seen('I')) {
+        iterations = code_value_short();
+      }
+
+      if(iterations > 10) {
+        iterations = 10;
+      } else if (iterations < 1) {
+        iterations = 1;
+      }
+
+      if(get_encoder_axis_address(axis) != 0) {
+        SERIAL_ECHO("Calculating ");
+        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(" axis steps per mm, running ");
+        SERIAL_ECHO(iterations);
+        SERIAL_ECHOLN(" iterations.");
+
+        calculate_axis_steps_per_unit(axis,iterations);
+      } else {
+        SERIAL_ECHO("No encoder enabled for axis ");
+        SERIAL_ECHOLN(get_axis_letter(axis));
+
+      }
+    }
+  }
+
   //called at startup to start I2C comms, checks magnetic field strength and reports any problems 
   //also sets any lighting preferences as defined in configuration
   void i2c_encoder_init() {
@@ -7488,17 +7537,15 @@ void calculate_volumetric_multipliers() {
       set_encoder_light_brightness(E_AXIS,E_AXIS_BR_1,E_AXIS_BR_2);
       #endif
     #endif
-
-
   }
 
   //call when axis is homed to 0 to initialise starting point
   void set_encoder_homed(AxisEnum axis) {
-
         encoder_offset[axis] = get_axis_encoder_count(axis);
-        SERIAL_ECHO("Initial axis offset of ");
-        SERIAL_ECHOLN(encoder_offset[axis]);
-
+        if(marlin_debug_flags) {
+          SERIAL_ECHO("Initial axis offset of ");
+          SERIAL_ECHOLN(encoder_offset[axis]);
+        }
   }
 
   void check_axis_errors() {
@@ -7582,6 +7629,103 @@ void calculate_volumetric_multipliers() {
     SERIAL_ECHOLN(error);
 
   	return error;
+  }
+
+  void calculate_axis_steps_per_unit(AxisEnum axis, int iterations) {
+
+    float oldStepsMm;
+    float newStepsMm;
+    float startDistance;
+    float endDistance;
+    float travelDistance;
+    float travelledDistance;
+    float total = 0;
+
+    if(get_encoder_axis_address(axis) != 0) {
+
+
+
+      for(int i = 0; i < iterations; i++) {
+        startDistance = 1*((max_pos[axis] - min_pos[axis])/4);
+        endDistance = 3*((max_pos[axis] - min_pos[axis])/4);
+        travelDistance = (max_pos[axis] - min_pos[axis])/2;
+
+
+        //Move to 1/4th of axis length
+
+        setup_for_endstop_move();
+        set_destination_to_current();
+        sync_plan_position();
+
+        destination[axis] = startDistance;
+        feedrate = homing_feedrate[axis];
+
+        line_to_destination();
+        st_synchronize();
+        prepare_move();
+        st_synchronize();
+
+        //Reset encoder offset
+
+        set_encoder_homed(axis);
+
+        //Move to 3/4ths of axis length
+
+        setup_for_endstop_move();
+        set_destination_to_current();
+        sync_plan_position();
+
+
+        destination[axis] = endDistance;
+
+        feedrate = homing_feedrate[axis];
+
+        line_to_destination();
+        st_synchronize();
+        prepare_move();
+        st_synchronize();
+
+        //Read encoder distance
+
+        travelledDistance = calculate_encoder_position_mm(axis);
+
+        SERIAL_ECHO("Attempted to travel: ");
+        SERIAL_ECHO(travelDistance);
+        SERIAL_ECHOLN("mm.");
+
+        SERIAL_ECHO("Actually travelled:  ");
+        SERIAL_ECHO(travelledDistance);
+        SERIAL_ECHOLN("mm.");
+
+        //float percentageDifference = (travelDistance - travelledDistance) / travelDistance;
+
+        //Calculate new axis steps per unit
+        oldStepsMm = axis_steps_per_unit[axis];
+        newStepsMm = (oldStepsMm * travelDistance) / travelledDistance;
+
+        SERIAL_ECHO("Old steps per mm: ");
+        SERIAL_ECHOLN(oldStepsMm);
+
+        SERIAL_ECHO("New steps per mm: ");
+        SERIAL_ECHOLN(newStepsMm);
+        
+        //Save new value
+        axis_steps_per_unit[axis] = newStepsMm;
+
+        total += newStepsMm;
+      }
+
+      if(iterations > 1) {
+        total = total / (float) iterations;
+        SERIAL_ECHO("Average steps per mm: ");
+        SERIAL_ECHOLN(total);
+      }
+
+      //Save new value
+      axis_steps_per_unit[axis] = newStepsMm;
+
+      SERIAL_ECHOLN("Calculated steps per mm has been set. Please save to EEPROM (M500) if you wish to keep these values.");
+    }
   }
 
   void report_encoder_positions_mm(AxisEnum axis) {
@@ -7718,7 +7862,6 @@ void calculate_volumetric_multipliers() {
       SERIAL_ECHOLN(" axis encoder passes test.");
       return true; 
     }
-
   }
 
   byte get_encoder_magnetic_strength(AxisEnum axis) {
@@ -7743,6 +7886,7 @@ void calculate_volumetric_multipliers() {
     return reading;
   }
 
+  //get I2C address for a given axis, also used to check if axis is enabled (address = 0 if not)
   int get_encoder_axis_address(AxisEnum axis) {
     int addr=0;
 
