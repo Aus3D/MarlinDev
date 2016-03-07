@@ -2035,6 +2035,12 @@ static void homeaxis(AxisEnum axis) {
       SERIAL_EOL;
     }
   #endif
+
+  #if ENABLED(I2C_AXIS_ENCODERS)
+    if(get_encoder_axis_address(axis) != 0) {
+      set_encoder_homed(axis);
+    }
+  #endif
 }
 
 #if ENABLED(FWRETRACT)
@@ -2387,10 +2393,6 @@ inline void gcode_G28() {
           if (marlin_debug_flags & DEBUG_LEVELING) {
             print_xyz("> QUICK_HOME > current_position 2", current_position);
           }
-        #endif
-
-        #if ENABLED(I2C_AXIS_ENCODERS)
-          set_encoder_homed(X_AXIS);
         #endif
       }
 
@@ -6255,9 +6257,6 @@ void process_next_command() {
       case 865: // M999: Restart after being Stopped
         gcode_M865();
         break;
-      case 866: // M999: Restart after being Stopped
-        gcode_M866();
-        break;
       case 867: // M999: Restart after being Stopped
         gcode_M867();
         break;
@@ -7281,8 +7280,8 @@ void calculate_volumetric_multipliers() {
 
   #define ENCODER_TICKS_PER_MM 2048
 
-  #define ENCODER_READINGS_AVG 10
-  #define ENCODER_READINGS_DEL 25
+  #define ENCODER_READINGS_AVG 5
+  #define ENCODER_READINGS_DEL 10
 
   #define AXIS_ERROR_THRESHOLD_ABORT 100.0	//number of steps error in any given axis after which the printer will abort
   #define AXIS_ERROR_THRESHOLD_CORRECT 0.10	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
@@ -7300,6 +7299,10 @@ void calculate_volumetric_multipliers() {
   #define I2C_MAG_SIG_GOOD 0
   #define I2C_MAG_SIG_MID 1
   #define I2C_MAG_SIG_BAD 2
+
+  #define I2C_ENC_LED_PAR_MODE 10
+  #define I2C_ENC_LED_PAR_BRT 11
+  #define I2C_ENC_LED_PAR_RATE 14
 
   typedef union{
       volatile long val = 0;
@@ -7363,6 +7366,7 @@ void calculate_volumetric_multipliers() {
       showOne = true;
     } 
 
+
     //if no axis specified show for all enabled axes
     if(!showOne) {
       report_encoder_positions_mm(X_AXIS);
@@ -7374,10 +7378,17 @@ void calculate_volumetric_multipliers() {
 
   //set module LED modes for a given axis
   inline void gcode_M865 () {
-    int ledMode[] = {0,0};
+    int led = 0;
+    int ledMode;
+    int ledBrightness;
+    int ledRate;
 
     AxisEnum axis;
     bool proceed = true;
+
+    bool updateMode = false;
+    bool updateBrightness = false;
+    bool updateRate = false;
 
     if (code_seen('X')) {
       axis = X_AXIS;
@@ -7392,57 +7403,60 @@ void calculate_volumetric_multipliers() {
       proceed = false;
     }
 
-    if(proceed) {
-      if (code_seen('M1')) {
-        ledMode[0] = code_value_short();
-      }
-      if (code_seen('M2')) {
-        ledMode[1] = code_value_short();
-      }
-
-      SERIAL_ECHO("Setting to Mode ");
-      SERIAL_ECHO(ledMode[0]);
-      SERIAL_ECHO(" & ");
-      SERIAL_ECHOLN(ledMode[1]);
-
-      set_encoder_light_mode(axis,(byte) ledMode[0],(byte) ledMode[1]); 
-    }
-  }
-
-  //set module LED brightnesses for a given axis
-  inline void gcode_M866 () {
-    int ledBrightness[] = {50,50};
-
-    AxisEnum axis;
-    bool proceed = true;
-
-    if (code_seen('X')) {
-      axis = X_AXIS;
-    } else if (code_seen('Y')) {
-      axis = Y_AXIS;
-    } else if (code_seen('Z')) {
-      axis = Z_AXIS;
-    } else if (code_seen('E')) {
-      axis = E_AXIS;
+    if (code_seen('L')) {
+      led = code_value_short();
     } else {
-      SERIAL_ECHO("Please specify axis!");
+      SERIAL_ECHO("Please specify led number (L1, L2)!");
       proceed = false;
     }
 
     if(proceed) {
-      if (code_seen('B1')) {
-        ledBrightness[0] = code_value_short();
-      }
-      if (code_seen('B2')) {
-        ledBrightness[1] = code_value_short();
+      if (code_seen('M')) {
+        ledMode = code_value_short();
+        updateMode = true;
       }
 
-      SERIAL_ECHO("Setting to brightness ");
-      SERIAL_ECHO(ledBrightness[0]);
-      SERIAL_ECHO(" & ");
-      SERIAL_ECHOLN(ledBrightness[1]);
+      if (code_seen('B')) {
+        ledBrightness = code_value_short();
+        updateBrightness = true;
+      }
 
-      set_encoder_light_brightness(axis,(byte) ledBrightness[0],(byte) ledBrightness[1]); 
+      if (code_seen('R')) {
+        ledRate = code_value_short();
+        updateRate = true;
+      }
+
+      if(updateMode) {
+        SERIAL_ECHO("Setting ");
+        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(" axis encoder LED ");
+        SERIAL_ECHO(led);
+        SERIAL_ECHO(" to mode ");
+        SERIAL_ECHOLN(ledMode);
+
+        set_encoder_light_param(axis,I2C_ENC_LED_PAR_MODE,(byte) led,(byte) ledMode); 
+      }
+      if(updateBrightness) {
+        SERIAL_ECHO("Setting ");
+        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(" axis encoder LED ");
+        SERIAL_ECHO(led);
+        SERIAL_ECHO(" to brightness ");
+        SERIAL_ECHOLN(ledBrightness);
+
+        set_encoder_light_param(axis,I2C_ENC_LED_PAR_BRT,(byte) led,(byte) ledBrightness); 
+      }
+      if(updateRate) {
+        SERIAL_ECHO("Setting ");
+        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(" axis encoder LED ");
+        SERIAL_ECHO(led);
+        SERIAL_ECHO(" to rate ");
+        SERIAL_ECHOLN(ledRate);
+
+        set_encoder_light_param(axis,I2C_ENC_LED_PAR_RATE,(byte) led,(byte) ledRate); 
+      }
+
     }
   }
 
@@ -7500,41 +7514,65 @@ void calculate_volumetric_multipliers() {
 
   	#ifdef I2C_ENCODER_ADDR_X
       encoder_magnetic_strength_test(X_AXIS);
-      #if defined(X_AXIS_LM_1) && defined(X_AXIS_LM_2)
-        set_encoder_light_mode(X_AXIS,X_AXIS_LM_1,X_AXIS_LM_2);
+      #if defined(X_AXIS_LM_1)
+        set_encoder_light_param(X_AXIS,I2C_ENC_LED_PAR_MODE,0,X_AXIS_LM_1);
       #endif
-      #if defined(X_AXIS_BR_1) && defined(X_AXIS_BR_2)
-      set_encoder_light_brightness(X_AXIS,X_AXIS_BR_1,X_AXIS_BR_2);
+      #if defined(X_AXIS_LM_2)
+        set_encoder_light_param(X_AXIS,I2C_ENC_LED_PAR_MODE,1,X_AXIS_LM_2);
+      #endif
+      #if defined(X_AXIS_BR_1)
+      set_encoder_light_param(X_AXIS,I2C_ENC_LED_PAR_BRT,0,X_AXIS_BR_1);
+      #endif
+      #if defined(X_AXIS_BR_2)
+      set_encoder_light_param(X_AXIS,I2C_ENC_LED_PAR_BRT,1,X_AXIS_BR_2);
       #endif
   	#endif
 
     #ifdef I2C_ENCODER_ADDR_Y
       encoder_magnetic_strength_test(Y_AXIS);
-      #if defined(Y_AXIS_LM_1) && defined(Y_AXIS_LM_2)
-        set_encoder_light_mode(Y_AXIS,Y_AXIS_LM_1,Y_AXIS_LM_2);
+      #if defined(Y_AXIS_LM_1)
+        set_encoder_light_param(Y_AXIS,I2C_ENC_LED_PAR_MODE,0,Y_AXIS_LM_1);
       #endif
-      #if defined(Y_AXIS_BR_1) && defined(Y_AXIS_BR_2)
-      set_encoder_light_brightness(Y_AXIS,Y_AXIS_BR_1,Y_AXIS_BR_2);
+      #if defined(Y_AXIS_LM_2)
+        set_encoder_light_param(Y_AXIS,I2C_ENC_LED_PAR_MODE,1,Y_AXIS_LM_2);
+      #endif
+      #if defined(Y_AXIS_BR_1)
+      set_encoder_light_param(Y_AXIS,I2C_ENC_LED_PAR_BRT,0,Y_AXIS_BR_1);
+      #endif
+      #if defined(Y_AXIS_BR_2)
+      set_encoder_light_param(Y_AXIS,I2C_ENC_LED_PAR_BRT,1,Y_AXIS_BR_2);
       #endif
     #endif
 
     #ifdef I2C_ENCODER_ADDR_Z
       encoder_magnetic_strength_test(Z_AXIS);
-      #if defined(Z_AXIS_LM_1) && defined(Z_AXIS_LM_2)
-        set_encoder_light_mode(Z_AXIS,Z_AXIS_LM_1,Z_AXIS_LM_2);
+      #if defined(Z_AXIS_LM_1)
+        set_encoder_light_param(Z_AXIS,I2C_ENC_LED_PAR_MODE,0,Z_AXIS_LM_1);
       #endif
-      #if defined(Z_AXIS_BR_1) && defined(Z_AXIS_BR_2)
-      set_encoder_light_brightness(Z_AXIS,Z_AXIS_BR_1,Z_AXIS_BR_2);
+      #if defined(Z_AXIS_LM_2)
+        set_encoder_light_param(Z_AXIS,I2C_ENC_LED_PAR_MODE,1,Z_AXIS_LM_2);
+      #endif
+      #if defined(Z_AXIS_BR_1)
+      set_encoder_light_param(Z_AXIS,I2C_ENC_LED_PAR_BRT,0,Z_AXIS_BR_1);
+      #endif
+      #if defined(Z_AXIS_BR_2)
+      set_encoder_light_param(Z_AXIS,I2C_ENC_LED_PAR_BRT,1,Z_AXIS_BR_2);
       #endif
     #endif
 
     #ifdef I2C_ENCODER_ADDR_E
      encoder_magnetic_strength_test(E_AXIS);
-      #if defined(E_AXIS_LM_1) && defined(E_AXIS_LM_2)
-        set_encoder_light_mode(E_AXIS,E_AXIS_LM_1,E_AXIS_LM_2);
+      #if defined(E_AXIS_LM_1)
+        set_encoder_light_param(E_AXIS,I2C_ENC_LED_PAR_MODE,0,E_AXIS_LM_1);
       #endif
-      #if defined(E_AXIS_BR_1) && defined(E_AXIS_BR_2)
-      set_encoder_light_brightness(E_AXIS,E_AXIS_BR_1,E_AXIS_BR_2);
+      #if defined(E_AXIS_LM_2)
+        set_encoder_light_param(E_AXIS,I2C_ENC_LED_PAR_MODE,1,E_AXIS_LM_2);
+      #endif
+      #if defined(E_AXIS_BR_1)
+      set_encoder_light_param(E_AXIS,I2C_ENC_LED_PAR_BRT,0,E_AXIS_BR_1);
+      #endif
+      #if defined(E_AXIS_BR_2)
+      set_encoder_light_param(E_AXIS,I2C_ENC_LED_PAR_BRT,1,E_AXIS_BR_2);
       #endif
     #endif
   }
@@ -7832,19 +7870,11 @@ void calculate_volumetric_multipliers() {
     return sum / ENCODER_READINGS_AVG;
   }
 
-  void set_encoder_light_mode(AxisEnum axis, byte mode1, byte mode2) {
+  void set_encoder_light_param(AxisEnum axis,byte parameter, byte led, byte setting) {
     Wire.beginTransmission(get_encoder_axis_address(axis));
-    Wire.write(10);
-    Wire.write(mode1);
-    Wire.write(mode2);
-    Wire.endTransmission();
-  }
-
-  void set_encoder_light_brightness(AxisEnum axis, byte brt1, byte brt2) {
-    Wire.beginTransmission(get_encoder_axis_address(axis));
-    Wire.write(11);
-    Wire.write(brt1);
-    Wire.write(brt2);
+    Wire.write(parameter);
+    Wire.write(led);
+    Wire.write(setting);
     Wire.endTransmission();
   }
 
