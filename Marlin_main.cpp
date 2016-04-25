@@ -694,10 +694,10 @@ void setup() {
   st_init();    // Initialize stepper, this enables interrupts!
   setup_photpin();
   servo_init();
+
   #if ENABLED(I2C_AXIS_ENCODERS)
     i2c_encoder_init();
   #endif
-
 
   #if HAS_CONTROLLERFAN
     SET_OUTPUT(CONTROLLERFAN_PIN); //Set pin used for driver cooling fan
@@ -2134,7 +2134,12 @@ void unknown_command_error() {
  */
 inline void gcode_G0_G1() {
   if (IsRunning()) {
+
     gcode_get_destination(); // For X Y Z E F
+
+    //if(abs(current_position[X_AXIS]-destination[X_AXIS])>2) {
+    //  correct_axis_errors2(false);
+    //}
 
     #if ENABLED(FWRETRACT)
 
@@ -6953,6 +6958,7 @@ void idle() {
   manage_heater();
   manage_inactivity();
   lcd_update();
+  correct_axis_errors3(false);
 }
 
 /**
@@ -7280,11 +7286,11 @@ void calculate_volumetric_multipliers() {
 
   #define ENCODER_TICKS_PER_MM 2048
 
-  #define ENCODER_READINGS_AVG 5
+  #define ENCODER_READINGS_AVG 3
   #define ENCODER_READINGS_DEL 10
 
-  #define AXIS_ERROR_THRESHOLD_ABORT 100.0	//number of steps error in any given axis after which the printer will abort
-  #define AXIS_ERROR_THRESHOLD_CORRECT 0.10	//number of steps in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
+  #define AXIS_ERROR_THRESHOLD_ABORT 100.0	//number of mm error in any given axis after which the printer will abort
+  #define AXIS_ERROR_THRESHOLD_CORRECT 0.20	//number of mm in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
 
   #define ERROR_CORRECT_X
   //#define ERROR_CORRECT_Y
@@ -7311,8 +7317,9 @@ void calculate_volumetric_multipliers() {
 
   double axisError[4] = {0};
   long encoder_offset[4] = {0};
+  bool encoder_initialised[4] = {false};
 
-  inline void gcode_M860() { correct_axis_errors(); }
+  inline void gcode_M860() { correct_axis_errors(true); }
   inline void gcode_M861() { check_axis_errors(); }
 
   //report axis position in encoder ticks
@@ -7428,7 +7435,7 @@ void calculate_volumetric_multipliers() {
 
       if(updateMode) {
         SERIAL_ECHO("Setting ");
-        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(axis_codes[axis]);
         SERIAL_ECHO(" axis encoder LED ");
         SERIAL_ECHO(led);
         SERIAL_ECHO(" to mode ");
@@ -7438,7 +7445,7 @@ void calculate_volumetric_multipliers() {
       }
       if(updateBrightness) {
         SERIAL_ECHO("Setting ");
-        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(axis_codes[axis]);
         SERIAL_ECHO(" axis encoder LED ");
         SERIAL_ECHO(led);
         SERIAL_ECHO(" to brightness ");
@@ -7448,7 +7455,7 @@ void calculate_volumetric_multipliers() {
       }
       if(updateRate) {
         SERIAL_ECHO("Setting ");
-        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(axis_codes[axis]);
         SERIAL_ECHO(" axis encoder LED ");
         SERIAL_ECHO(led);
         SERIAL_ECHO(" to rate ");
@@ -7492,7 +7499,7 @@ void calculate_volumetric_multipliers() {
 
       if(get_encoder_axis_address(axis) != 0) {
         SERIAL_ECHO("Calculating ");
-        SERIAL_ECHO(get_axis_letter(axis));
+        SERIAL_ECHO(axis_codes[axis]);
         SERIAL_ECHO(" axis steps per mm, running ");
         SERIAL_ECHO(iterations);
         SERIAL_ECHOLN(" iterations.");
@@ -7500,7 +7507,7 @@ void calculate_volumetric_multipliers() {
         calculate_axis_steps_per_unit(axis,iterations);
       } else {
         SERIAL_ECHO("No encoder enabled for axis ");
-        SERIAL_ECHOLN(get_axis_letter(axis));
+        SERIAL_ECHOLN(axis_codes[axis]);
 
       }
     }
@@ -7584,18 +7591,22 @@ void calculate_volumetric_multipliers() {
           SERIAL_ECHO("Initial axis offset of ");
           SERIAL_ECHOLN(encoder_offset[axis]);
         }
+        if(encoder_magnetic_strength_test(axis)) {
+          encoder_initialised[axis] = true;
+        }
   }
 
   void check_axis_errors() {
   	#if ENABLED(ERROR_CORRECT_X)
-  		axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+  		axisError[X_AXIS] = calculate_axis_error(X_AXIS,true);
   	#endif
   }
 
-  void correct_axis_errors() {
+  void correct_axis_errors(bool report) {
 
     #if ENABLED(ERROR_CORRECT_X)
-      axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+      st_synchronize();
+      axisError[X_AXIS] = calculate_axis_error(X_AXIS,report);
     #endif
 
 
@@ -7604,14 +7615,17 @@ void calculate_volumetric_multipliers() {
     }
     else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
     {
-      //SERIAL_ECHOLN("Correcting error.");
+      SERIAL_ECHO("Correcting error (");
+      SERIAL_ECHO(axisError[X_AXIS]);
+      SERIAL_ECHOLN("mm)");
 
       current_position[X_AXIS] = st_get_position_mm(X_AXIS);
       current_position[Y_AXIS] = st_get_position_mm(Y_AXIS);
       current_position[Z_AXIS] = st_get_position_mm(Z_AXIS);
       current_position[E_AXIS] = st_get_position_mm(E_AXIS);
 
-      float tempDest = current_position[X_AXIS];
+      float tempCurrent = current_position[X_AXIS];
+      float tempDest[4] = {destination[X_AXIS],destination[Y_AXIS],destination[Z_AXIS],destination[E_AXIS]};
 
       long X_current_steps = st_get_position(X_AXIS),
           Y_current_steps = st_get_position(Y_AXIS),
@@ -7629,42 +7643,108 @@ void calculate_volumetric_multipliers() {
       sync_plan_position();
 
 
-      destination[X_AXIS] = tempDest-axisError[X_AXIS];
+      destination[X_AXIS] = tempCurrent-axisError[X_AXIS];
 
-      feedrate = min(homing_feedrate[X_AXIS], homing_feedrate[Y_AXIS]);
+      //feedrate = min(homing_feedrate[X_AXIS], homing_feedrate[Y_AXIS]);
       line_to_destination();
       st_synchronize();
-      prepare_move();
-      st_synchronize();
+      //prepare_move();
+      //st_synchronize();
 
       //Update position to 
 
       st_set_position(tempSteps,Y_current_steps,Z_current_steps,E_current_steps); 
-      st_synchronize();
 
-      axisError[X_AXIS] = calculate_axis_error(X_AXIS);
+      if(report) {
+        st_synchronize();
+        axisError[X_AXIS] = calculate_axis_error(X_AXIS,report);
+      }
+
+      destination[X_AXIS] = tempDest[X_AXIS];
+      destination[Y_AXIS] = tempDest[Y_AXIS];
+      destination[Z_AXIS] = tempDest[Z_AXIS];
+      destination[E_AXIS] = tempDest[E_AXIS];
 
     }
 
   }
 
+    void correct_axis_errors2(bool report) {
+
+    #if ENABLED(ERROR_CORRECT_X)
+      //st_synchronize();
+      axisError[X_AXIS] = calculate_axis_error(X_AXIS,report);
+    #endif
+
+
+    if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_ABORT) {
+      SERIAL_ECHOLN("Error severe, abort!");
+    }
+    else if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+    {
+      SERIAL_ECHO("Correcting error (");
+      SERIAL_ECHO(axisError[X_AXIS]);
+      SERIAL_ECHOLN("mm)");
+
+/*
+      current_position[X_AXIS] = st_get_position_mm(X_AXIS);
+      current_position[Y_AXIS] = st_get_position_mm(Y_AXIS);
+      current_position[Z_AXIS] = st_get_position_mm(Z_AXIS);
+      current_position[E_AXIS] = st_get_position_mm(E_AXIS);
+      */
+
+      //float tempCurrent = current_position[X_AXIS];
+      //float tempDest[NUM_AXIS] = {destination[X_AXIS],destination[Y_AXIS],destination[Z_AXIS],destination[E_AXIS]};
+
+      long current_steps[NUM_AXIS] = {st_get_position(X_AXIS),st_get_position(Y_AXIS),st_get_position(Z_AXIS),st_get_position(E_AXIS)};
+
+      long X_corrected_steps = current_steps[X_AXIS] + (axisError[X_AXIS] * axis_steps_per_unit[X_AXIS]);
+
+      st_set_position(X_corrected_steps,current_steps[Y_AXIS],current_steps[Z_AXIS],current_steps[E_AXIS]); 
+
+
+
+    }
+
+  }
+
+  void correct_axis_errors3(bool report) {
+
+    #if ENABLED(ERROR_CORRECT_X)
+      axisError[X_AXIS] = calculate_axis_error(X_AXIS,report);
+    #endif
+
+    if(encoder_initialised[X_AXIS]) {
+      if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
+      {
+        if(axisError[X_AXIS] > 0) {
+          babystepsTodo[X_AXIS] -= 10;
+        } else {
+          babystepsTodo[X_AXIS] += 10;
+        }
+      }
+    }
+  }
+
   //returns error in terms of mm
-  double calculate_axis_error(AxisEnum axis) {
+  double calculate_axis_error(AxisEnum axis,bool report) {
 
     float target, actual, error;
 
     target = st_get_position_mm(axis);
     actual = calculate_encoder_position_mm(axis);
     error =  actual - target;
-    SERIAL_ECHO(get_axis_letter(axis));
-    SERIAL_ECHO(" Target: ");
-    SERIAL_ECHOLN(target);
-    SERIAL_ECHO(get_axis_letter(axis));
-    SERIAL_ECHO(" Actual: ");
-    SERIAL_ECHOLN(actual);
-    SERIAL_ECHO(get_axis_letter(axis));
-    SERIAL_ECHO(" Error : ");
-    SERIAL_ECHOLN(error);
+    if(report) {
+      SERIAL_ECHO(axis_codes[axis]);
+      SERIAL_ECHO(" Target: ");
+      SERIAL_ECHOLN(target);
+      SERIAL_ECHO(axis_codes[axis]);
+      SERIAL_ECHO(" Actual: ");
+      SERIAL_ECHOLN(actual);
+      SERIAL_ECHO(axis_codes[axis]);
+      SERIAL_ECHO(" Error : ");
+      SERIAL_ECHOLN(error);
+    }
 
   	return error;
   }
@@ -7883,12 +7963,12 @@ void calculate_volumetric_multipliers() {
 
     if(magStrength == I2C_MAG_SIG_BAD) {
       SERIAL_ECHO("Warning, ");
-      SERIAL_ECHO(get_axis_letter(axis));
+      SERIAL_ECHO(axis_codes[axis]);
       SERIAL_ECHOLN(" axis magnetic strip not detected!");
 
       return false;
     } else { 
-      SERIAL_ECHO(get_axis_letter(axis));
+      SERIAL_ECHO(axis_codes[axis]);
       SERIAL_ECHOLN(" axis encoder passes test.");
       return true; 
     }
@@ -7946,20 +8026,6 @@ void calculate_volumetric_multipliers() {
     return addr;
   }
 
-  //This probably already exists in a much cleverer form that I can't find or figure out
-  //Temporary placeholder until I find it and feel like an idiot
-  char get_axis_letter(AxisEnum axis) {
-    switch (axis) {
-      case X_AXIS:
-        return 'X';
-      case Y_AXIS:
-        return 'Y';
-      case Z_AXIS:
-        return 'Z';
-      case E_AXIS:
-        return 'E';
-    }
-  }
 
 #endif
 

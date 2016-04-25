@@ -15,3 +15,7 @@ applet/
 *.bak
 *.DS_Store
 *.idea
+
+pins_RAMPS_13.h
+
+
