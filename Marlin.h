@@ -379,7 +379,7 @@ void calculate_axis_steps_per_unit(AxisEnum, int);
 long calculate_encoder_position(AxisEnum);
 long get_axis_encoder_count(AxisEnum);
 void set_encoder_light_param(AxisEnum,byte,byte,byte);
-bool encoder_magnetic_strength_test(AxisEnum);
+bool encoder_magnetic_strength_test(AxisEnum,bool);
 byte get_encoder_magnetic_strength(AxisEnum);
 int get_encoder_axis_address(AxisEnum);
 char get_axis_letter(AxisEnum);

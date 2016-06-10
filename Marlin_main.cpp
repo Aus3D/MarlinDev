@@ -7286,11 +7286,11 @@ void calculate_volumetric_multipliers() {
 
   #define ENCODER_TICKS_PER_MM 2048
 
-  #define ENCODER_READINGS_AVG 3
-  #define ENCODER_READINGS_DEL 10
+  #define ENCODER_READINGS_AVG 1
+  #define ENCODER_READINGS_DEL 0
 
   #define AXIS_ERROR_THRESHOLD_ABORT 100.0	//number of mm error in any given axis after which the printer will abort
-  #define AXIS_ERROR_THRESHOLD_CORRECT 0.20	//number of mm in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
+  #define AXIS_ERROR_THRESHOLD_CORRECT 0.050	//number of mm in error above which the printer will attempt to correct the error, errors smaller than this are ignored to avoid measurement noise
 
   #define ERROR_CORRECT_X
   //#define ERROR_CORRECT_Y
@@ -7316,6 +7316,7 @@ void calculate_volumetric_multipliers() {
   }i2cLong;
 
   double axisError[4] = {0};
+  bool axisWorking[4] = {false};
   long encoder_offset[4] = {0};
   bool encoder_initialised[4] = {false};
 
@@ -7517,10 +7518,10 @@ void calculate_volumetric_multipliers() {
   //also sets any lighting preferences as defined in configuration
   void i2c_encoder_init() {
     Wire.begin();
-    SERIAL_ECHOLN("Initialising encoders");
+    SERIAL_ECHOLN("Initialising encoders AAA");
 
   	#ifdef I2C_ENCODER_ADDR_X
-      encoder_magnetic_strength_test(X_AXIS);
+      encoder_magnetic_strength_test(X_AXIS,true);
       #if defined(X_AXIS_LM_1)
         set_encoder_light_param(X_AXIS,I2C_ENC_LED_PAR_MODE,0,X_AXIS_LM_1);
       #endif
@@ -7536,7 +7537,7 @@ void calculate_volumetric_multipliers() {
   	#endif
 
     #ifdef I2C_ENCODER_ADDR_Y
-      encoder_magnetic_strength_test(Y_AXIS);
+      encoder_magnetic_strength_test(Y_AXIS,true);
       #if defined(Y_AXIS_LM_1)
         set_encoder_light_param(Y_AXIS,I2C_ENC_LED_PAR_MODE,0,Y_AXIS_LM_1);
       #endif
@@ -7552,7 +7553,7 @@ void calculate_volumetric_multipliers() {
     #endif
 
     #ifdef I2C_ENCODER_ADDR_Z
-      encoder_magnetic_strength_test(Z_AXIS);
+      encoder_magnetic_strength_test(Z_AXIS,true);
       #if defined(Z_AXIS_LM_1)
         set_encoder_light_param(Z_AXIS,I2C_ENC_LED_PAR_MODE,0,Z_AXIS_LM_1);
       #endif
@@ -7568,7 +7569,7 @@ void calculate_volumetric_multipliers() {
     #endif
 
     #ifdef I2C_ENCODER_ADDR_E
-     encoder_magnetic_strength_test(E_AXIS);
+     encoder_magnetic_strength_test(E_AXIS,true);
       #if defined(E_AXIS_LM_1)
         set_encoder_light_param(E_AXIS,I2C_ENC_LED_PAR_MODE,0,E_AXIS_LM_1);
       #endif
@@ -7591,7 +7592,7 @@ void calculate_volumetric_multipliers() {
           SERIAL_ECHO("Initial axis offset of ");
           SERIAL_ECHOLN(encoder_offset[axis]);
         }
-        if(encoder_magnetic_strength_test(axis)) {
+        if(encoder_magnetic_strength_test(axis,true)) {
           encoder_initialised[axis] = true;
         }
   }
@@ -7710,20 +7711,48 @@ void calculate_volumetric_multipliers() {
 
   void correct_axis_errors3(bool report) {
 
+
     #if ENABLED(ERROR_CORRECT_X)
       axisError[X_AXIS] = calculate_axis_error(X_AXIS,report);
+      axisWorking[X_AXIS] = encoder_magnetic_strength_test(X_AXIS,false);
+    #endif
+    #if ENABLED(ERROR_CORRECT_Y)
+      axisError[Y_AXIS] = calculate_axis_error(Y_AXIS,report);
+      axisWorking[Y_AXIS] = encoder_magnetic_strength_test(Y_AXIS,false);
+    #endif
+    #if ENABLED(ERROR_CORRECT_Z)
+      axisError[Z_AXIS] = calculate_axis_error(Z_AXIS,report);
+      axisWorking[Z_AXIS] = encoder_magnetic_strength_test(Z_AXIS,false);
+    #endif
+    #if ENABLED(ERROR_CORRECT_E)
+      axisError[E_AXIS] = calculate_axis_error(E_AXIS,report);
+      axisWorking[E_AXIS] = encoder_magnetic_strength_test(E_AXIS,false);
     #endif
 
-    if(encoder_initialised[X_AXIS]) {
-      if(abs(axisError[X_AXIS]) > AXIS_ERROR_THRESHOLD_CORRECT)
-      {
-        if(axisError[X_AXIS] > 0) {
-          babystepsTodo[X_AXIS] -= 10;
-        } else {
-          babystepsTodo[X_AXIS] += 10;
+    for(int i = 0; i < NUM_AXIS; i++) {
+      if(encoder_initialised[i] && axisWorking[i]) {
+        if(abs(axisError[i]) > AXIS_ERROR_THRESHOLD_CORRECT)
+        {
+          //int adjustmentAmount = 1 * constrain(axisError[i],5,25);
+          
+          //babystepsTodo[i] = -adjustmentAmount;
+
+          if(axisError[i] > 0) {
+            babystepsTodo[i] -= 1;
+          } else {
+            babystepsTodo[i] += 1;
+          }
+        }
+      } else {
+        if(encoder_initialised[i] == true) {
+            encoder_initialised[i] = false;
+            SERIAL_ECHO(axis_codes[i]);
+            SERIAL_ECHOLN(" axis encoder lost fix, disengaging error correction on this axis.");
+            
         }
       }
     }
+
   }
 
   //returns error in terms of mm
@@ -7951,25 +7980,40 @@ void calculate_volumetric_multipliers() {
   }
 
   void set_encoder_light_param(AxisEnum axis,byte parameter, byte led, byte setting) {
-    Wire.beginTransmission(get_encoder_axis_address(axis));
-    Wire.write(parameter);
-    Wire.write(led);
-    Wire.write(setting);
-    Wire.endTransmission();
+
+    if(get_encoder_axis_address(axis) != 0) {
+      Wire.beginTransmission(get_encoder_axis_address(axis));
+      Wire.write(parameter);
+      Wire.write(led);
+      Wire.write(setting);
+      Wire.endTransmission();
+    }
+
   }
 
-  bool encoder_magnetic_strength_test(AxisEnum axis) {
+  bool encoder_magnetic_strength_test(AxisEnum axis, bool report) {
     byte magStrength = get_encoder_magnetic_strength(axis);
 
     if(magStrength == I2C_MAG_SIG_BAD) {
-      SERIAL_ECHO("Warning, ");
-      SERIAL_ECHO(axis_codes[axis]);
-      SERIAL_ECHOLN(" axis magnetic strip not detected!");
+      if(report) {
+        SERIAL_ECHO("Warning, ");
+        SERIAL_ECHO(axis_codes[axis]);
+        SERIAL_ECHOLN(" axis magnetic strip not detected!");
+      }
 
       return false;
+    } else if (magStrength == 99) {
+      if(report) {
+        SERIAL_ECHO("Warning, ");
+        SERIAL_ECHO(axis_codes[axis]);
+        SERIAL_ECHOLN(" axis encoder not detected!");
+      }
+      return false;
     } else { 
-      SERIAL_ECHO(axis_codes[axis]);
-      SERIAL_ECHOLN(" axis encoder passes test.");
+      if(report) {
+        SERIAL_ECHO(axis_codes[axis]);
+        SERIAL_ECHOLN(" axis encoder passes test.");
+      }
       return true; 
     }
   }
@@ -7985,7 +8029,10 @@ void calculate_volumetric_multipliers() {
     //Read value
     Wire.requestFrom(get_encoder_axis_address(axis),1);
 
-    byte reading = Wire.read();
+    byte reading = 99;
+
+    reading = Wire.read();
+    //SERIAL_ECHO(reading);
 
     //Set module back to normal (distance) mode
     Wire.beginTransmission(get_encoder_axis_address(axis));
